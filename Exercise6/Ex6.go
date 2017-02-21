@@ -1,124 +1,170 @@
-//Process pairs
 package main
 
 import (
-	_ "bytes"
-	"encoding/binary"
 	"fmt"
-	_ "log"
+	"io/ioutil"
 	"net"
 	"os"
 	"os/exec"
-	"strings"
+	"strconv"
 	"time"
 )
 
-//var serverAddr *net.UDPAddr
-//var localIP string
-var port = ":30042"
-var msg = "Hello from the other side"
-var conn *net.UDPConn
+const COUNTER_FILE = "counterSave.txt"
+const PORT_FILE = "port.txt"
+
+func main() {
+
+	// Setup:
+	fmt.Println("This is backup")
+	localIP := "127.0.0.1"
+	localPort := read_port_from_file()
+	sendToPort := write_next_port_to_file(localPort)
+	localAddr := localIP + ":" + localPort
+	sendToAddr := localIP + ":" + sendToPort
+
+	fmt.Println("this is sendToAddr: ", sendToAddr)
+	udpAddr, err := net.ResolveUDPAddr("udp4", localAddr)
+	check_error(err)
+
+	connection, err := net.ListenUDP("udp4", udpAddr)
+	check_error(err)
+
+	fmt.Println("Listening on port ", localPort)
+	defer connection.Close()
+
+	masterChan := make(chan bool)
+
+	// Ser om det er noen som sender "I am the master"
+	go detect_precense(connection, masterChan)
+
+	<-masterChan
+	fmt.Println("I am master")
+	spawn_backup()
+	counterChan := make(chan int)
+	go read_from_file(counterChan)
+	time.Sleep(time.Second)
+	go spam_precense(sendToAddr)
+	go counter_and_write_to_file(counterChan)
+	time.Sleep(time.Second * 10000)
+}
+
+func counter_and_write_to_file(counterChan chan int) {
+	counter := <-counterChan
+	for {
+		counter++
+
+		// Overskriver filen counter lagres i
+		dataFile, err := os.Create(COUNTER_FILE)
+		check_error(err)
+
+		// Converterer int -> string og lagrer i filen over
+		dataFile.WriteString(strconv.Itoa(counter))
+		dataFile.Close()
+		fmt.Println(counter)
+		time.Sleep(time.Millisecond * 200)
+	}
+}
+
+func read_from_file(counterChan chan int) {
+	var counter int
+
+	// Dersom det ikke eksister en fil, sett counter til 0
+	if _, err := os.Stat(COUNTER_FILE); os.IsNotExist(err) {
+		counter = 0
+	} else {
+
+		// Leser fra fil og converterer til int
+		data, err := ioutil.ReadFile(COUNTER_FILE)
+		check_error(err)
+		counter, _ = strconv.Atoi(string(data))
+		fmt.Println(counter)
+	}
+	counterChan <- counter
+}
+
+func spawn_backup() {
+	// DENNE MÅ ENDRES!!!
+	// Oppsett av terminal på mac
+	arg := "Tell application \"Terminal\"\n set newTab to do script [\"cd Desktop/\"]\n do script [\"go run ov6.go\"] in newTab\n end Tell"
+	command := exec.Command("/usr/bin/osascript", "-e", arg)
+	err := command.Run()
+	check_error(err)
+
+	fmt.Println("backup should be spawned")
+}
+
+func spam_precense(remoteAddr string) {
+	// Setup
+	udpRemote, _ := net.ResolveUDPAddr("udp", remoteAddr)
+
+	// Åpner kobling
+	connection, err := net.DialUDP("udp", nil, udpRemote)
+	check_error(err)
+	defer connection.Close()
+
+	for {
+		// Dender melding 2 ganger i sekundet
+		_, err := connection.Write([]byte("I am the master"))
+		check_error(err)
+		time.Sleep(time.Millisecond * 500)
+	}
+}
+
+func detect_precense(connection *net.UDPConn, masterChan chan bool) {
+	// Her lagres meldingen
+	buffer := make([]byte, 2048)
+
+	// Evig while løkke helt til det ikke registreres en melding
+	for {
+		// Timer for hvor lenge man skal vente på melding
+		t := time.Now()
+		connection.SetReadDeadline(t.Add(3 * time.Second))
+		_, _, err := connection.ReadFromUDP(buffer)
+
+		// Dersom error blir backup ny master og går ut av løkka
+		if err != nil {
+			fmt.Println("UDP timeout: ", err)
+			masterChan <- true
+			break
+		}
+	}
+}
+
+func write_next_port_to_file(portNum string) string {
+	// String -> int
+	portNumToFile, err := strconv.Atoi(portNum)
+	check_error(err)
+	portNumToFile++
+
+	// Overskriver den gamle filen
+	dataFile, err := os.Create(PORT_FILE)
+	check_error(err)
+
+	// Og legger inn port
+	dataFile.WriteString(strconv.Itoa(portNumToFile))
+	dataFile.Close()
+
+	return strconv.Itoa(portNumToFile)
+}
+
+func read_port_from_file() string {
+	// Dersom det ikke eksister en fil, returnerer vi start porten
+	if _, err := os.Stat(PORT_FILE); os.IsNotExist(err) {
+		return "30042"
+	}
+
+	// Leser fra fil
+	data, err := ioutil.ReadFile(PORT_FILE)
+	check_error(err)
+
+	return string(data)
+}
 
 func check_error(err error) {
+	// Standard error check
 	if err != nil {
 		fmt.Println("Error: ", err)
 		os.Exit(0)
 	}
-}
-
-// All credz Anders.
-// Brukes til å sammenligne om det er en meling fra deg selv.
-// I såfall ignorer denne.
-func get_local_IP() string {
-	conn, err := net.DialTCP("tcp4", nil, &net.TCPAddr{IP: []byte{8, 8, 8, 8}, Port: 53})
-	check_error(err)
-	defer conn.Close()
-
-	localIP := strings.Split(conn.LocalAddr().String(), ":")[0]
-	return localIP
-}
-
-func Init() (*net.UDPAddr, string) {
-	localIP := get_local_IP()
-
-	// setting up UDP server for broadcasting
-	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+port)
-	check_error(err)
-	fmt.Println("Server adress: ", serverAddr)
-	fmt.Println("Local adress: ", localIP)
-
-	return serverAddr, localIP
-}
-
-func spawn_new_terminal() {
-	command := exec.Command("cmd", "/C go run Ex6.go")
-	_ = command.Run()
-}
-
-func main() {
-	IP := get_local_IP()
-	var master bool = false
-	var counter uint64 = 0
-	fmt.Println("Local IP is: ", IP)
-	udpaddr, _ := net.ResolveUDPAddr("udp", IP+":30005")
-	connection, err := net.ListenUDP("udp", udpaddr)
-	if err != nil {
-		fmt.Println("Housten, we have a problem!")
-	}
-
-	fmt.Println("backup running")
-	UDPmsg := make([]byte, 8)
-
-	for !(master) {
-		connection.SetReadDeadline(time.Now().Add(time.Second * 2))
-
-		n, _, err := connection.ReadFromUDP(UDPmsg)
-
-		if err == nil {
-			counter = binary.BigEndian.Uint64(UDPmsg[0:n])
-
-		} else {
-			master = true
-		}
-
-	}
-	fmt.Println(counter)
-	connection.Close()
-
-	fmt.Println("Connection was closed")
-	//spawnNewTerminal()
-
-	connection, _ = net.DialUDP("udp", nil, udpaddr)
-	go func() {
-		for {
-
-			fmt.Println(counter)
-			counter++
-			binary.BigEndian.PutUint64(UDPmsg, counter)
-			fmt.Println("Sending message: ", UDPmsg)
-			_, _ = connection.Write(UDPmsg)
-
-			time.Sleep(time.Second)
-		}
-	}()
-	go func() {
-		for {
-			connection.SetReadDeadline(time.Now().Add(time.Second * 2))
-
-			n, _, err := connection.ReadFromUDP(UDPmsg)
-
-			if err == nil {
-				counter = binary.BigEndian.Uint64(UDPmsg[0:n])
-				fmt.Println("Recieved message?")
-
-			} else {
-				master = true
-				fmt.Println("Error in reading")
-			}
-		}
-	}()
-
-	for {
-	}
-
 }
