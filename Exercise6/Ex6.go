@@ -2,14 +2,15 @@
 package main
 
 import (
+	_ "bytes"
+	"encoding/binary"
 	"fmt"
+	_ "log"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
-  "os/exec"
-  _ "bytes"
-  _ "log"
 )
 
 //var serverAddr *net.UDPAddr
@@ -42,74 +43,82 @@ func Init() (*net.UDPAddr, string) {
 
 	// setting up UDP server for broadcasting
 	serverAddr, err := net.ResolveUDPAddr("udp", "127.0.0.1"+port)
-  check_error(err)
+	check_error(err)
 	fmt.Println("Server adress: ", serverAddr)
 	fmt.Println("Local adress: ", localIP)
 
 	return serverAddr, localIP
 }
 
-func Recive_msg_UDP(channel chan){
-	serverAddr, err := net.ResolveUDPAddr("udp", port)
-	check_error(err)
-
-	conn, err := net.ListenUDP("udp", serverAddr)
-	check_error(err)
-	defer conn.Close()
-
-	buffer := make([]byte, 1024)
-
-	n, address, err := conn.ReadFromUDP(buffer)
-	check_error(err)
-	fmt.Println("Got message from ", address, " with n = ", n)
-	if n > 0 {
-		fmt.Println("From address: ", address, " got message: ", string(buffer[0:n]))
-    channel <- true
-	}
-	fmt.Println("Listening...")
-	time.Sleep(100 * time.Millisecond)
-}
-
-func Broadcast_UDP(serverAddr *net.UDPAddr) {
-	localAddr, err := net.ResolveUDPAddr("udp", ":0")
-	check_error(err)
-
-	conn, err := net.DialUDP("udp", localAddr, serverAddr)
-	check_error(err)
-	defer conn.Close()
-
-	fmt.Println("Sending message...")
-	_, err = conn.Write([]byte(msg))
-	check_error(err)
-	time.Sleep(1000 * time.Millisecond)
+func spawn_new_terminal() {
+	command := exec.Command("cmd", "/C go run Ex6.go")
+	_ = command.Run()
 }
 
 func main() {
-  primary := false
-  timer := false
+	IP := get_local_IP()
+	var master bool = false
+	var counter uint64 = 0
+	fmt.Println("Local IP is: ", IP)
+	udpaddr, _ := net.ResolveUDPAddr("udp", IP+":30005")
+	connection, err := net.ListenUDP("udp", udpaddr)
+	if err != nil {
+		fmt.Println("Housten, we have a problem!")
+	}
 
-  channel := make(chan bool)
+	fmt.Println("backup running")
+	UDPmsg := make([]byte, 8)
 
-  timer := time.NewTimer(5*time.Second)
+	for !(master) {
+		connection.SetReadDeadline(time.Now().Add(time.Second * 2))
 
-  for {
-    if <-channel{
-      timer := time.NewTimer(5*time.Second)
-    }
-    if <-timer{
-      //you are primary
-    }
-  }
+		n, _, err := connection.ReadFromUDP(UDPmsg)
 
-  serverAddr, _ := Init()
+		if err == nil {
+			counter = binary.BigEndian.Uint64(UDPmsg[0:n])
 
+		} else {
+			master = true
+		}
 
-  cmd := exec.Command("gnome-terminal", "-x", "sh", "-c", "go run Ex6.go")
-  err := cmd.Start()
-  check_error(err)
+	}
+	fmt.Println(counter)
+	connection.Close()
 
-  IP := get_local_IP()
-  fmt.Println(IP)
+	fmt.Println("Connection was closed")
+	//spawnNewTerminal()
 
+	connection, _ = net.DialUDP("udp", nil, udpaddr)
+	go func() {
+		for {
+
+			fmt.Println(counter)
+			counter++
+			binary.BigEndian.PutUint64(UDPmsg, counter)
+			fmt.Println("Sending message: ", UDPmsg)
+			_, _ = connection.Write(UDPmsg)
+
+			time.Sleep(time.Second)
+		}
+	}()
+	go func() {
+		for {
+			connection.SetReadDeadline(time.Now().Add(time.Second * 2))
+
+			n, _, err := connection.ReadFromUDP(UDPmsg)
+
+			if err == nil {
+				counter = binary.BigEndian.Uint64(UDPmsg[0:n])
+				fmt.Println("Recieved message?")
+
+			} else {
+				master = true
+				fmt.Println("Error in reading")
+			}
+		}
+	}()
+
+	for {
+	}
 
 }
