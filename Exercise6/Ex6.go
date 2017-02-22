@@ -19,7 +19,7 @@ func main() {
 	fmt.Println("This is backup")
 	localIP := "127.0.0.1"
 	localPort := read_port_from_file()
-	sendToPort := write_next_port_to_file(localPort)
+	sendToPort := write_port_to_file(localPort)
 	localAddr := localIP + ":" + localPort
 	sendToAddr := localIP + ":" + sendToPort
 
@@ -36,17 +36,16 @@ func main() {
 	masterChan := make(chan bool)
 
 	// Ser om det er noen som sender "I am the master"
-	go detect_precense(connection, masterChan)
+	go detect_spam(connection, masterChan)
 
 	<-masterChan
 	fmt.Println("I am master")
-	spawn_backup()
+	backup()
 	counterChan := make(chan int)
 	go read_from_file(counterChan)
 	time.Sleep(time.Second)
-	go spam_precense(sendToAddr)
-	go counter_and_write_to_file(counterChan)
-	time.Sleep(time.Second * 10000)
+	go spam(sendToAddr)
+	counter_and_write_to_file(counterChan)
 }
 
 func counter_and_write_to_file(counterChan chan int) {
@@ -58,7 +57,7 @@ func counter_and_write_to_file(counterChan chan int) {
 		dataFile, err := os.Create(COUNTER_FILE)
 		check_error(err)
 
-		// Converterer int -> string og lagrer i filen over
+		// Converterer int -> string og lagrer i filen
 		dataFile.WriteString(strconv.Itoa(counter))
 		dataFile.Close()
 		fmt.Println(counter)
@@ -83,18 +82,18 @@ func read_from_file(counterChan chan int) {
 	counterChan <- counter
 }
 
-func spawn_backup() {
+func backup() {
 	// DENNE MÅ ENDRES!!!
 	// Oppsett av terminal på mac
-	arg := "Tell application \"Terminal\"\n set newTab to do script [\"cd Desktop/\"]\n do script [\"go run ov6.go\"] in newTab\n end Tell"
-	command := exec.Command("/usr/bin/osascript", "-e", arg)
+	// arg := "Tell application \"Terminal\"\n set newTab to do script [\"cd Desktop/\"]\n do script [\"go run ov6.go\"] in newTab\n end Tell"
+	command := exec.Command("gnome-terminal", "-x", "sh", "-c", "go run Ex6.go")
 	err := command.Run()
 	check_error(err)
 
 	fmt.Println("backup should be spawned")
 }
 
-func spam_precense(remoteAddr string) {
+func spam(remoteAddr string) {
 	// Setup
 	udpRemote, _ := net.ResolveUDPAddr("udp", remoteAddr)
 
@@ -111,7 +110,7 @@ func spam_precense(remoteAddr string) {
 	}
 }
 
-func detect_precense(connection *net.UDPConn, masterChan chan bool) {
+func detect_spam(connection *net.UDPConn, masterChan chan bool) {
 	// Her lagres meldingen
 	buffer := make([]byte, 2048)
 
@@ -131,7 +130,7 @@ func detect_precense(connection *net.UDPConn, masterChan chan bool) {
 	}
 }
 
-func write_next_port_to_file(portNum string) string {
+func write_port_to_file(portNum string) string {
 	// String -> int
 	portNumToFile, err := strconv.Atoi(portNum)
 	check_error(err)
